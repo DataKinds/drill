@@ -1,5 +1,7 @@
+CC?=clang
+
 all:
-	gcc -Wall -g -o drill main.c
+	$(CC) -pedantic -Wall -g -o drill main.c
 
 nr: all
 	./drill

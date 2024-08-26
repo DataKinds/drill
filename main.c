@@ -15,9 +15,8 @@ typedef struct Foci {
     Span* s;                   // the foci
 } Foci;
 
-Foci foci_new() {
-    Foci foci = { .cnt = 0, .contiguousc = 0, .s = NULL };
-    return foci;
+void foci_init(Foci* uninitialized) {
+    *uninitialized = (Foci){ .cnt = 0, .contiguousc = 0, .s = NULL };
 }
 
 typedef enum BytecodeTag {
@@ -50,7 +49,7 @@ void print_single_bytecode(Bytecode in, unsigned long ip) {
     if (in.data[ip] == NULL) {
         printf(" (no data)\n");
     } else {
-        printf(" %s\n", in.data[ip]);
+        printf(" \"%s\"\n", in.data[ip]);
     }
 }
 
@@ -68,13 +67,8 @@ void bytecode_recursive_free(Bytecode* bc) {
     free(bc);
 }
 
-Bytecode* bytecode_new() { 
-    Bytecode* bc = calloc(1, sizeof(Bytecode));
-    bc->tag = NULL;
-    bc->data = NULL;
-    bc->cnt = 0;
-    bc->contiguousc = 0;
-    return bc;
+void bytecode_init(Bytecode* uninitialized) { 
+    *uninitialized = (Bytecode){ .tag = NULL, .data = NULL, .cnt = 0, .contiguousc = 0 };
 }
 
 // Reallocs the bytecode if it overflows with `newelems` entries added
@@ -111,9 +105,10 @@ typedef struct VM {            // Execution model
     Foci foci;                // what text is currently focused?
 } VM;
 
-VM vm_new(char* in, Bytecode* bc) {
-    VM vm = { .ip = 0, .bc = bc, .text = in, .foci = foci_new() };
-    return vm;
+void vm_init(VM* uninitialized, char* in, Bytecode* bc) {
+    Foci foci;
+    foci_init(&foci);
+    *uninitialized = (VM){ .ip = 0, .bc = bc, .text = in, .foci = foci };
 }
 
 // once all appending actions have been done, make sure
@@ -160,10 +155,11 @@ long foci_check(Foci in, void* ptr) {
 
 // it's safe to free in->s after calling this
 Foci foci_merge_overlapping(Foci in) {
+    Foci out;
+    foci_init(&out);
     if (in.cnt == 0) {
-        return foci_new();
+        return out;
     }
-    Foci out = foci_new();
     void* min_start = foci_min_start(in);
     void* max_end = foci_max_end(in);
     foci_append(&out, min_start, min_start+1);
@@ -188,7 +184,7 @@ Foci foci_merge_overlapping(Foci in) {
 // expects vm->ip to be pointing to a BCT_DRILL tag and a regex in data
 void vm_run_drill(VM* vm) {
     char* regex = vm->bc->data[vm->ip];
-    char* found = strstr(vm->text, regex);
+    char* found = strstr(vm->text, regex); // TODO: regex
     if (found == NULL) {
         return;
     } else {
@@ -219,12 +215,18 @@ char* vm_run(VM vm) {
 /* ~~~~~~~~~~~ Parser ~~~~~~~~~~~ */
 #define PAD_SIZE 1024
 typedef struct ParseState {
-    Bytecode* out; // Did this parser produce output?
+    Bytecode out; // Did this parser produce output? "No" represented by a zero-length Bytecode
     char* altout; // Some parsers produce strings instead
     char* rest; // The rest of the input stream
 } ParseState;
-void free_ParseState(ParseState ps) {
-    free(ps.out);
+
+void parsestate_init(ParseState* uninitialized, char* unparsed) {
+    Bytecode bc;
+    bytecode_init(&bc);
+    *uninitialized = (ParseState){ .out = bc, .altout = NULL, .rest = unparsed };
+}
+
+void parsestate_free(ParseState ps) {
     free(ps.altout);
 }
 
@@ -237,13 +239,13 @@ void die(const char* fmt,...) {
 }
 
 void consume_subparse(ParseState* p, ParseState subparse) {
-    if (subparse.out != NULL) {
-        bytecode_concat(p->out, *subparse.out);
+    if (subparse.out.cnt > 0) {
+        bytecode_concat(&p->out, subparse.out);
     }
     p->rest = subparse.rest;
 }
 
-// parses regexp ending on /, places it in altout
+// parses regexp/, so like a regexp missing the leading slash & ending on a slash, places it in altout
 ParseState parse_regexp(char* in) {
     ParseState o = { .altout = "", .rest = in };
     char pad[PAD_SIZE] = "";
@@ -268,27 +270,26 @@ ParseState parse_regexp(char* in) {
 
 // parses /regexp/
 ParseState parse_drill(char* in) {
-    Bytecode* bc_out = bytecode_new();
-    ParseState o = { .out = bc_out, .rest = in };
+    ParseState o;
+    parsestate_init(&o, in);
     if (*(o.rest++) != '/') {
         die("Expected / at start of drill");
     }
     ParseState sub = parse_regexp(o.rest);
     consume_subparse(&o, sub);
-    bytecode_append(o.out, BCT_DRILL, strdup(sub.altout));
-    free_ParseState(sub);
-    if (*o.rest != '/') {
+    bytecode_append(&o.out, BCT_DRILL, strdup(sub.altout));
+    parsestate_free(sub);
+    if (*(o.rest++)!= '/') {
         die("Expected / at end of drill");
     }
-    o.rest++;
 
     return o;
 }
 
 // parses s/regexp/replacement/
 ParseState parse_substitute(char* in) {
-    Bytecode* bc_out = bytecode_new();
-    ParseState o = { .out = bc_out, .rest = in };
+    ParseState o;
+    parsestate_init(&o, in);
     if (*(o.rest++) != 's') {
         die("Expected s at start of substitution");
     }
@@ -297,15 +298,15 @@ ParseState parse_substitute(char* in) {
     }
     ParseState sub1 = parse_regexp(o.rest);
     consume_subparse(&o, sub1);
-    bytecode_append(o.out, BCT_SUBSTITUTE_MATCH, strdup(sub1.altout));
-    free_ParseState(sub1);
+    bytecode_append(&o.out, BCT_SUBSTITUTE_MATCH, strdup(sub1.altout));
+    parsestate_free(sub1);
     if (*(o.rest++) != '/') {
         die("Expected / in middle of substitution");
     }
     ParseState sub2 = parse_regexp(o.rest);
     consume_subparse(&o, sub2);
-    bytecode_append(o.out, BCT_SUBSTITUTE_REPLACE, strdup(sub2.altout));
-    free_ParseState(sub2);
+    bytecode_append(&o.out, BCT_SUBSTITUTE_REPLACE, strdup(sub2.altout));
+    parsestate_free(sub2);
     if (*(o.rest++) != '/') {
         die("Expected / at end of substitution");
     }
@@ -314,9 +315,9 @@ ParseState parse_substitute(char* in) {
 
 
 ParseState parse_root(char* in) {
-    Bytecode* bc_out = bytecode_new();
-    ParseState o = { .out = bc_out, .rest = in };
-    bytecode_append(o.out, BCT_ECHO, NULL);
+    ParseState o;
+    parsestate_init(&o, in);
+    bytecode_append(&o.out, BCT_ECHO, NULL);
     while (1) {
         char c = *o.rest;
         ParseState sub;
@@ -326,12 +327,12 @@ ParseState parse_root(char* in) {
             case 's':
                 sub = parse_substitute(o.rest);
                 consume_subparse(&o, sub);
-                free_ParseState(sub);
+                parsestate_free(sub);
                 break;
             case '/':
                 sub = parse_drill(o.rest);
                 consume_subparse(&o, sub);
-                free_ParseState(sub);
+                parsestate_free(sub);
                 break;
 
             case ' ':
@@ -348,7 +349,7 @@ ParseState parse_root(char* in) {
 }
 
 Bytecode parse(char* in) {
-    return *parse_root(in).out;
+    return parse_root(in).out;
 }
 
 int main(int argc, char** argv) {
