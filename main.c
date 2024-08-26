@@ -2,11 +2,13 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
 
 /* ~~~~~~~~~~~ VM ~~~~~~~~~~~ */
 typedef struct Span {
-    void* start;
-    void* end;
+    char* start;
+    char* end;
 } Span;
 
 typedef struct Foci {
@@ -19,12 +21,17 @@ void foci_init(Foci* uninitialized) {
     *uninitialized = (Foci){ .cnt = 0, .contiguousc = 0, .s = NULL };
 }
 
+void foci_free(Foci in) {
+    free(in.s);
+}
+
 typedef enum BytecodeTag {
-    BCT_SUBSTITUTE_MATCH,
-    BCT_SUBSTITUTE_REPLACE,
-    BCT_DRILL,
-    BCT_AROUND,
-    BCT_ECHO
+    BCT_SUBSTITUTE, // Replace the foci with a given string
+    BCT_DRILL,      // Narrow the foci to a given regex (well, string)
+    BCT_AROUND,     // Narrow the foci to their 0-length beginnings and ends
+    BCT_STARTS,     // Narrow the foci to their 0-length beginnings
+    BCT_ENDS,       // Narrow the foci to their 0-length ends
+    BCT_COMPLEMENT  // Invert focus
 } BytecodeTag;
 
 typedef struct Bytecode {
@@ -34,17 +41,18 @@ typedef struct Bytecode {
     unsigned int contiguousc; // size of allocated arenas for tags and data
 } Bytecode;
 
-#define _print_bytecode_branch(name) case name:\
-    printf(#name);\
+#define _print_bytecode_branch(idx, name) case name:\
+    printf("%ld " #name, ip);\
     break;
 
 void print_single_bytecode(Bytecode in, unsigned long ip) {
     switch (in.tag[ip]) {
-        _print_bytecode_branch(BCT_SUBSTITUTE_MATCH)
-        _print_bytecode_branch(BCT_SUBSTITUTE_REPLACE)
-        _print_bytecode_branch(BCT_DRILL)
-        _print_bytecode_branch(BCT_AROUND)
-        _print_bytecode_branch(BCT_ECHO)
+        _print_bytecode_branch(ip, BCT_SUBSTITUTE)
+        _print_bytecode_branch(ip, BCT_DRILL)
+        _print_bytecode_branch(ip, BCT_AROUND)
+        _print_bytecode_branch(ip, BCT_STARTS)
+        _print_bytecode_branch(ip, BCT_ENDS)
+        _print_bytecode_branch(ip, BCT_COMPLEMENT)
     }
     if (in.data[ip] == NULL) {
         printf(" (no data)\n");
@@ -98,28 +106,17 @@ void bytecode_concat(Bytecode* in, Bytecode other) {
     in->cnt += other.cnt;
 }
 
-typedef struct VM {            // Execution model
-    unsigned long ip;          // current execution offset into Bytecode tag+data
-    Bytecode* bc;              // the bytecode we're executing
-    char* text;                // the text to mutate
-    Foci foci;                // what text is currently focused?
-} VM;
-
-void vm_init(VM* uninitialized, char* in, Bytecode* bc) {
-    Foci foci;
-    foci_init(&foci);
-    *uninitialized = (VM){ .ip = 0, .bc = bc, .text = in, .foci = foci };
-}
 
 // once all appending actions have been done, make sure
 // to call foci_merge_overlapping to deduplicate spans
-void foci_append(Foci* foci, void* start, void* end) {    
+void foci_append(Foci* foci, char* start, char* end) {    
     if (foci->contiguousc <= (foci->cnt + 1) * sizeof(Span)) {
         foci->contiguousc = (foci->contiguousc + 1) * 2;
         foci->s = realloc(foci->s, foci->contiguousc);
     }
     foci->s[foci->cnt].start = start;
     foci->s[foci->cnt].end = end;
+    foci->cnt++;
 }
 
 void* foci_min_start(Foci foci) {
@@ -143,7 +140,7 @@ void* foci_max_end(Foci foci) {
 }
 
 // returns the index of the first span focusing on the ptr, or -1.
-long foci_check(Foci in, void* ptr) {
+long foci_check(Foci in, char* ptr) {
     for (unsigned long i = 0; i < in.cnt; i++) {
         Span tester = in.s[i];
         if (ptr >= tester.start && ptr < tester.end) {
@@ -153,7 +150,8 @@ long foci_check(Foci in, void* ptr) {
     return -1;
 }
 
-// it's safe to free in->s after calling this
+// this creates a distinct copy, it's safe to call foci_free on the input afterwards
+// TODO: support distinct foci bordering each other... iterate and check if we're in two spans?
 Foci foci_merge_overlapping(Foci in) {
     Foci out;
     foci_init(&out);
@@ -181,31 +179,85 @@ Foci foci_merge_overlapping(Foci in) {
     return out;
 }
 
+void print_span(Span s) {
+    printf("\"%.*s\"\n", s.end - s.start, s.start);
+}
+
+void print_foci(Foci f) {
+    printf("Foci cnt: %ld\n", f.cnt);
+    for (unsigned long i = 0; i < f.cnt; i++) {
+        printf("%ld ", i);
+        print_span(f.s[i]);
+    }
+}
+
+typedef struct VM {            // Execution model
+    unsigned long ip;          // current execution offset into Bytecode tag+data
+    Bytecode bc;               // the bytecode we're executing
+    char* text;                // the text to mutate
+    Foci foci;                 // what text is currently focused?
+} VM;
+
+void vm_init(VM* uninitialized, char* in, Bytecode bc) {
+    Foci foci;
+    foci_init(&foci);
+    // VMs start with everything focused
+    foci_append(&foci, in, strchr(in, '\0'));
+    *uninitialized = (VM){ .ip = 0, .bc = bc, .text = in, .foci = foci };
+}
+
 // expects vm->ip to be pointing to a BCT_DRILL tag and a regex in data
 void vm_run_drill(VM* vm) {
-    char* regex = vm->bc->data[vm->ip];
-    char* found = strstr(vm->text, regex); // TODO: regex
-    if (found == NULL) {
-        return;
-    } else {
-        foci_append(&vm->foci, found, found+strlen(regex));
+    char* regex = vm->bc.data[vm->ip];
+    unsigned long match_length = strlen(regex);
+    Foci new_foci;
+    foci_init(&new_foci);
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        unsigned long focus_length = focus.end - focus.start;
+        char* haystack = focus.start;
+        while (*haystack != '\0') {
+            printf("calling strncmp with %s, %s, %ld, got %d\n", haystack, regex, match_length, strncmp(haystack, regex, match_length));
+            if (strncmp(haystack, regex, MIN(match_length, focus_length)) == 0) { // TODO: regex
+                foci_append(&new_foci, haystack, haystack + match_length);
+            } 
+            haystack++;
+        }
     }
+    foci_free(vm->foci);
+    vm->foci = new_foci;
+}
+
+void print_vm(VM vm) {
+    printf("Text: %s\n", vm.text);
+    printf("Bytecode:\n");
+    print_bytecode(vm.bc);
+    printf("IP: %ld\n", vm.ip);
+    printf("Foci:\n");
+    print_foci(vm.foci);
+    puts("");
+    puts("");
 }
 
 // returns pointer to mutated text on success, NULL on error
 char* vm_run(VM vm) {
-    for (; vm.ip < vm.bc->cnt; vm.ip++) {
-        switch (vm.bc->tag[vm.ip]) {
+    printf("Initial state:\n");
+    print_vm(vm);
+    for (; vm.ip < vm.bc.cnt; vm.ip++) {
+        switch (vm.bc.tag[vm.ip]) {
             case BCT_DRILL:
                 vm_run_drill(&vm);
+                Foci old_foci = vm.foci;
+                vm.foci = foci_merge_overlapping(vm.foci);
+                foci_free(old_foci);
                 break;
-            case BCT_ECHO:
-            case BCT_SUBSTITUTE_MATCH:
+            case BCT_SUBSTITUTE:
                 // TODO the rest of the cases
             default:
                 printf("Got unimplemented bytecode ");
-                print_single_bytecode(*vm.bc, vm.ip);
+                print_single_bytecode(vm.bc, vm.ip);
         }
+        print_vm(vm);
     }
     return vm.text;
 }
@@ -268,6 +320,49 @@ ParseState parse_regexp(char* in) {
     return o;
 }
 
+// parses quote", so like a string missing the leading quote & ending on a quote, places it in altout
+ParseState parse_quote(char* in) {
+    ParseState o = { .altout = "", .rest = in };
+    char pad[PAD_SIZE] = "";
+    unsigned int padc = 0;
+    while (padc < PAD_SIZE) {
+        char c = *o.rest;
+        switch (c) {
+            case '\0':
+                die("EOF while parsing quote");
+                break;
+            case '"':
+                goto done;
+            default:
+                pad[padc++] = *o.rest;
+                pad[padc] = '\0';
+                o.rest++;
+        }
+    } done:
+    o.altout = strdup(pad);
+    return o;
+}
+
+// parses s/regexp/
+ParseState parse_substitute(char* in) {
+    ParseState o;
+    parsestate_init(&o, in);
+    if (*(o.rest++) != 's') {
+        die("Expected s at start of substitution");
+    }
+    if (*(o.rest++) != '/') {
+        die("Expected s/ at start of substitution");
+    }
+    ParseState sub = parse_regexp(o.rest);
+    consume_subparse(&o, sub);
+    bytecode_append(&o.out, BCT_SUBSTITUTE, strdup(sub.altout));
+    parsestate_free(sub);
+    if (*(o.rest++) != '/') {
+        die("Expected / at the end of substitution");
+    }
+    return o;
+}
+
 // parses /regexp/
 ParseState parse_drill(char* in) {
     ParseState o;
@@ -286,38 +381,10 @@ ParseState parse_drill(char* in) {
     return o;
 }
 
-// parses s/regexp/replacement/
-ParseState parse_substitute(char* in) {
-    ParseState o;
-    parsestate_init(&o, in);
-    if (*(o.rest++) != 's') {
-        die("Expected s at start of substitution");
-    }
-    if (*(o.rest++) != '/') {
-        die("Expected s/ at start of substitution");
-    }
-    ParseState sub1 = parse_regexp(o.rest);
-    consume_subparse(&o, sub1);
-    bytecode_append(&o.out, BCT_SUBSTITUTE_MATCH, strdup(sub1.altout));
-    parsestate_free(sub1);
-    if (*(o.rest++) != '/') {
-        die("Expected / in middle of substitution");
-    }
-    ParseState sub2 = parse_regexp(o.rest);
-    consume_subparse(&o, sub2);
-    bytecode_append(&o.out, BCT_SUBSTITUTE_REPLACE, strdup(sub2.altout));
-    parsestate_free(sub2);
-    if (*(o.rest++) != '/') {
-        die("Expected / at end of substitution");
-    }
-    return o;
-}
-
 
 ParseState parse_root(char* in) {
     ParseState o;
     parsestate_init(&o, in);
-    bytecode_append(&o.out, BCT_ECHO, NULL);
     while (1) {
         char c = *o.rest;
         ParseState sub;
@@ -334,7 +401,22 @@ ParseState parse_root(char* in) {
                 consume_subparse(&o, sub);
                 parsestate_free(sub);
                 break;
-
+            case '^':
+                o.rest++;
+                bytecode_append(&o.out, BCT_STARTS, NULL);
+                break;
+            case '$':
+                o.rest++;
+                bytecode_append(&o.out, BCT_ENDS, NULL);
+                break;
+            case '%':
+                o.rest++;
+                bytecode_append(&o.out, BCT_AROUND, NULL);
+                break;
+            case '@':
+                o.rest++;
+                bytecode_append(&o.out, BCT_COMPLEMENT, NULL);
+                break;
             case ' ':
             case '\t':
             case '\n':
@@ -353,7 +435,11 @@ Bytecode parse(char* in) {
 }
 
 int main(int argc, char** argv) {
-    Bytecode prog = parse("s/// s/he?ll{6}owo/rld/ /hello/");
+    Bytecode prog = parse("/hello/ s// s/rld/");
     print_bytecode(prog);
+    puts("");
+    VM vm;
+    vm_init(&vm, "hello, world!", prog);
+    vm_run(vm);
     return 0;
 }
