@@ -17,6 +17,10 @@
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
+#define DEBUG
+// Remove the below line for debug mode.
+#undef DEBUG
+
 /* ~~~~~~~~~~~ VM ~~~~~~~~~~~ */
 typedef struct Span {
     char* start;
@@ -236,7 +240,9 @@ void vm_run_drill(VM* vm) {
         unsigned long focus_length = focus.end - focus.start;
         char* haystack = focus.start;
         while (*haystack != '\0') {
+            #ifdef DEBUG
             printf("calling strncmp with %s, %s, %ld, got %d\n", haystack, regex, match_length, strncmp(haystack, regex, match_length));
+            #endif
             if (strncmp(haystack, regex, MIN(match_length, focus_length)) == 0) { // TODO: regex
                 foci_append(&new_foci, haystack, haystack + match_length);
             } 
@@ -313,8 +319,10 @@ void print_vm(VM vm) {
 
 // returns pointer to mutated text on success, NULL on error
 char* vm_run(VM vm) {
+    #ifdef DEBUG
     printf("Initial state:\n");
     print_vm(vm);
+    #endif
     for (; vm.ip < vm.bc.cnt; vm.ip++) {
         switch (vm.bc.tag[vm.ip]) {
             case BCT_DRILL:
@@ -331,7 +339,9 @@ char* vm_run(VM vm) {
                 printf("Got unimplemented bytecode ");
                 print_single_bytecode(vm.bc, vm.ip);
         }
+        #ifdef DEBUG
         print_vm(vm);
+        #endif
     }
     return vm.text;
 }
@@ -511,18 +521,20 @@ Bytecode parse(char* in) {
 // requires a heap-allocated text
 char* run(char* progstr, char* text) {
     Bytecode prog = parse(progstr);
+    #ifdef DEBUG
     print_bytecode(prog);
     puts("");
+    #endif
     VM vm;
     vm_init(&vm, text, prog);
     return vm_run(vm);
 }
 
 int main(int argc, char** argv) {
-    // printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
-    // printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
-    // printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
+    printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
+    printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
+    printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
     printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
-    // printf("%s\n", run("/,/ @ s/lol/", strdup("hello, world!")));
+    printf("%s\n", run("/,/ @ s/lol/", strdup("hello, world!")));
     return 0;
 }
