@@ -245,7 +245,8 @@ void vm_run_substitute(VM* vm) {
     char* new_text = calloc(strlen(vm->text) - foci_length + strlen(subby) * vm->foci.cnt, sizeof(char));
     // build new_text from successive concatenations
     char* done = vm->text;
-    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+    unsigned long i = 0;
+    for (; i < vm->foci.cnt; i++) {
         Span focus = vm->foci.s[i];
         strncat(new_text, done, focus.start - done);
         strcat(new_text, subby);
@@ -253,12 +254,13 @@ void vm_run_substitute(VM* vm) {
         // adjust foci affected by this substitution, including pointing them to new_text
         unsigned long text_length_change = strlen(subby) - (focus.end - focus.start);
         vm->foci.s[i].start = new_text + (focus.start - vm->text);
-        vm->foci.s[i].end = new_text + (focus.start - vm->text) + text_length_change;
+        vm->foci.s[i].end = new_text + (focus.end - vm->text) + text_length_change;
         for (unsigned long j = i+1; j < vm->foci.cnt; i++) {
             vm->foci.s[j].start = new_text + (vm->foci.s[j].start - vm->text) + text_length_change;
             vm->foci.s[j].end = new_text + (vm->foci.s[j].end - vm->text) + text_length_change;
         }
     }
+    strcat(new_text, done);
     free(vm->text);
     vm->text = new_text;
 }
@@ -481,5 +483,9 @@ char* run(char* progstr, char* text) {
 
 int main(int argc, char** argv) {
     printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
+    // printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
+    // printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
+    // printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
+    // printf("%s\n", run("/,/ @ s/lol/", strdup("hello, world!")));
     return 0;
 }
