@@ -599,6 +599,7 @@ int main(int argc, char** argv) {
     printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
     printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
     printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
+    printf("%s\n", run("/l/ % s/ol/", strdup("hello, world!")));
     printf("%s\n", run("/,/ @ s/lol/", strdup("hello,,,  world! i love to sing, dance, and play video games!")));
     return 0;
 }
