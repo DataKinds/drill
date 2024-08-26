@@ -206,6 +206,12 @@ void vm_init(VM* uninitialized, char* in, Bytecode bc) {
     *uninitialized = (VM){ .ip = 0, .bc = bc, .text = in, .foci = foci };
 }
 
+void vm_merge_overlapping_foci(VM* vm) {
+    Foci old_foci = vm->foci;
+    vm->foci = foci_merge_overlapping(vm->foci);
+    foci_free(old_foci);
+}
+
 // expects vm->ip to be pointing to a BCT_DRILL tag and a regex in data
 void vm_run_drill(VM* vm) {
     char* regex = vm->bc.data[vm->ip];
@@ -228,6 +234,36 @@ void vm_run_drill(VM* vm) {
     vm->foci = new_foci;
 }
 
+// expects vm->ip to be pointing to a BCT_SUBSTITUTE tag and the sub string in data
+void vm_run_substitute(VM* vm) {
+    char* subby = vm->bc.data[vm->ip];
+    // calculate length of string post-substitution
+    unsigned long foci_length = 0;
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        foci_length += vm->foci.s[i].end - vm->foci.s[i].end;
+    }
+    char* new_text = calloc(strlen(vm->text) - foci_length + strlen(subby) * vm->foci.cnt, sizeof(char));
+    // build new_text from successive concatenations
+    char* done = vm->text;
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        strncat(new_text, done, focus.start - done);
+        strcat(new_text, subby);
+        done = focus.end;
+        // adjust foci affected by this substitution, including pointing them to new_text
+        unsigned long text_length_change = strlen(subby) - (focus.end - focus.start);
+        vm->foci.s[i].start = new_text + (focus.start - vm->text);
+        vm->foci.s[i].end = new_text + (focus.start - vm->text) + text_length_change;
+        for (unsigned long j = i+1; j < vm->foci.cnt; i++) {
+            vm->foci.s[j].start = new_text + (vm->foci.s[j].start - vm->text) + text_length_change;
+            vm->foci.s[j].end = new_text + (vm->foci.s[j].end - vm->text) + text_length_change;
+        }
+    }
+    free(vm->text);
+    vm->text = new_text;
+}
+
+
 void print_vm(VM vm) {
     printf("Text: %s\n", vm.text);
     printf("Bytecode:\n");
@@ -247,12 +283,11 @@ char* vm_run(VM vm) {
         switch (vm.bc.tag[vm.ip]) {
             case BCT_DRILL:
                 vm_run_drill(&vm);
-                Foci old_foci = vm.foci;
-                vm.foci = foci_merge_overlapping(vm.foci);
-                foci_free(old_foci);
+                vm_merge_overlapping_foci(&vm);
                 break;
             case BCT_SUBSTITUTE:
-                // TODO the rest of the cases
+                vm_run_substitute(&vm);
+                break;
             default:
                 printf("Got unimplemented bytecode ");
                 print_single_bytecode(vm.bc, vm.ip);
@@ -434,12 +469,17 @@ Bytecode parse(char* in) {
     return parse_root(in).out;
 }
 
-int main(int argc, char** argv) {
-    Bytecode prog = parse("/hello/ s// s/rld/");
+// requires a heap-allocated text
+char* run(char* progstr, char* text) {
+    Bytecode prog = parse(progstr);
     print_bytecode(prog);
     puts("");
     VM vm;
-    vm_init(&vm, "hello, world!", prog);
-    vm_run(vm);
+    vm_init(&vm, text, prog);
+    return vm_run(vm);
+}
+
+int main(int argc, char** argv) {
+    printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
     return 0;
 }
