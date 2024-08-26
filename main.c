@@ -1,3 +1,15 @@
+// DRILL.
+// INSPIRED BY SAM. http://sam.cat-v.org/ 
+// COMES WITH NO WARRANTY.
+// WILL EAT YOUR CAT.
+// HACK THE PLANET.
+// BORN TO DIE.
+// WORLD IS A FUCK.
+// 鬼䘥 KILL EM ALL 1989.
+// I AM TRASH MAN.
+// 410,757,864,530 DEAD COPS.
+// REST IN PEACE AUGUST 20, 2018.
+
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -111,7 +123,7 @@ void bytecode_concat(Bytecode* in, Bytecode other) {
 // to call foci_merge_overlapping to deduplicate spans
 void foci_append(Foci* foci, char* start, char* end) {    
     if (foci->contiguousc <= (foci->cnt + 1) * sizeof(Span)) {
-        foci->contiguousc = (foci->contiguousc + 1) * 2;
+        foci->contiguousc = (foci->cnt + 1) * sizeof(Span) * 2;
         foci->s = realloc(foci->s, foci->contiguousc);
     }
     foci->s[foci->cnt].start = start;
@@ -119,8 +131,8 @@ void foci_append(Foci* foci, char* start, char* end) {
     foci->cnt++;
 }
 
-void* foci_min_start(Foci foci) {
-    void* min_start = foci.s[0].start;
+char* foci_min_start(Foci foci) {
+    char* min_start = foci.s[0].start;
     for (unsigned long i = 1; i < foci.cnt; i++) {
         if (foci.s[i].start < min_start) {
             min_start = foci.s[i].start;
@@ -129,8 +141,8 @@ void* foci_min_start(Foci foci) {
     return min_start;
 }
 
-void* foci_max_end(Foci foci) {
-    void* max_end = foci.s[0].end;
+char* foci_max_end(Foci foci) {
+    char* max_end = foci.s[0].end;
     for (unsigned long i = 1; i < foci.cnt; i++) {
         if (foci.s[i].end > max_end) {
             max_end = foci.s[i].end;
@@ -152,6 +164,7 @@ long foci_check(Foci in, char* ptr) {
 
 // this creates a distinct copy, it's safe to call foci_free on the input afterwards
 // TODO: support distinct foci bordering each other... iterate and check if we're in two spans?
+// TODO: this breaks 0 length spans
 Foci foci_merge_overlapping(Foci in) {
     Foci out;
     foci_init(&out);
@@ -243,6 +256,14 @@ void vm_run_substitute(VM* vm) {
         foci_length += vm->foci.s[i].end - vm->foci.s[i].end;
     }
     char* new_text = calloc(strlen(vm->text) - foci_length + strlen(subby) * vm->foci.cnt, sizeof(char));
+    // copy focus structure
+    Foci new_foci;
+    foci_init(&new_foci);
+    for (unsigned int i = 0; i < vm->foci.cnt; i++) {
+        char* new_start = new_text + (vm->foci.s[i].start - vm->text);
+        char* new_end = new_text + (vm->foci.s[i].end - vm->text);
+        foci_append(&new_foci, new_start, new_end);
+    }
     // build new_text from successive concatenations
     char* done = vm->text;
     unsigned long i = 0;
@@ -253,18 +274,31 @@ void vm_run_substitute(VM* vm) {
         done = focus.end;
         // adjust foci affected by this substitution, including pointing them to new_text
         unsigned long text_length_change = strlen(subby) - (focus.end - focus.start);
-        vm->foci.s[i].start = new_text + (focus.start - vm->text);
-        vm->foci.s[i].end = new_text + (focus.end - vm->text) + text_length_change;
-        for (unsigned long j = i+1; j < vm->foci.cnt; i++) {
-            vm->foci.s[j].start = new_text + (vm->foci.s[j].start - vm->text) + text_length_change;
-            vm->foci.s[j].end = new_text + (vm->foci.s[j].end - vm->text) + text_length_change;
+        new_foci.s[i].end += text_length_change;
+        for (unsigned long j = i+1; j < vm->foci.cnt; j++) {
+            new_foci.s[j].start += text_length_change;
+            new_foci.s[j].end += text_length_change;
         }
     }
     strcat(new_text, done);
     free(vm->text);
     vm->text = new_text;
+    foci_free(vm->foci);
+    vm->foci = new_foci;
 }
 
+// expects vm->ip to be pointing to a BCT_AROUND tag
+void vm_run_around(VM* vm) {    
+    Foci new_foci;
+    foci_init(&new_foci);
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        foci_append(&new_foci, focus.start, focus.start);
+        foci_append(&new_foci, focus.end, focus.end);
+    }
+    foci_free(vm->foci);
+    vm->foci = new_foci;
+}
 
 void print_vm(VM vm) {
     printf("Text: %s\n", vm.text);
@@ -289,6 +323,9 @@ char* vm_run(VM vm) {
                 break;
             case BCT_SUBSTITUTE:
                 vm_run_substitute(&vm);
+                break;
+            case BCT_AROUND:
+                vm_run_around(&vm);
                 break;
             default:
                 printf("Got unimplemented bytecode ");
@@ -482,10 +519,10 @@ char* run(char* progstr, char* text) {
 }
 
 int main(int argc, char** argv) {
-    printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
+    // printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
     // printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
     // printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
-    // printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
+    printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
     // printf("%s\n", run("/,/ @ s/lol/", strdup("hello, world!")));
     return 0;
 }
