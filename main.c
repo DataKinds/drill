@@ -1,4 +1,5 @@
 // DRILL.
+// WRITTEN BY OLUS2000.
 // INSPIRED BY SAM. http://sam.cat-v.org/ 
 // COMES WITH NO WARRANTY.
 // WILL EAT YOUR CAT.
@@ -12,6 +13,10 @@
 // 410,757,864,530 DEAD COPS.
 // THE ONLY WINNING MOVE IS NOT TO PLAY.
 // REST IN PEACE AUGUST 20, 2018.
+
+// BUILD WITH `make`. RUN WITH `./drill`.
+// IT'S NOTHING BUT PURE COCAINE AND C99.
+// I LOVE YOU.
 
 // HERE'S A FUCKING PHILOSOPHY FOR YOU: 
 // https://12ft.io/proxy?q=https%3A%2F%2Fwww.theatlantic.com%2Fscience%2Farchive%2F2017%2F08%2Fannie-dillards-total-eclipse%2F536148%2F
@@ -183,11 +188,11 @@ Foci foci_merge_overlapping(Foci in) {
     if (in.cnt == 0) {
         return out;
     }
-    void* min_start = foci_min_start(in);
-    void* max_end = foci_max_end(in);
+    char* min_start = foci_min_start(in);
+    char* max_end = foci_max_end(in);
     foci_append(&out, min_start, min_start+1);
     char scanning = 1;
-    for (void* ptr = min_start; ptr < max_end; ptr++) {
+    for (char* ptr = min_start; ptr < max_end; ptr++) {
         if (foci_check(in, ptr) >= 0) {
             if (scanning) {
                 out.s[out.cnt - 1].end = ptr+1;
@@ -205,7 +210,7 @@ Foci foci_merge_overlapping(Foci in) {
 }
 
 void print_span(Span s) {
-    printf("\"%.*s\"\n", s.end - s.start, s.start);
+    printf("\"%.*s\"\n", (int)(s.end - s.start), s.start);
 }
 
 void print_foci(Foci f) {
