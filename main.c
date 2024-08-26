@@ -3,12 +3,19 @@
 // COMES WITH NO WARRANTY.
 // WILL EAT YOUR CAT.
 // HACK THE PLANET.
+// YOU WANT TO USE IT? EDIT MAIN.
+// COMES WITH LOVENSE INTEGRATION.
 // BORN TO DIE.
 // WORLD IS A FUCK.
 // 鬼䘥 KILL EM ALL 1989.
 // I AM TRASH MAN.
 // 410,757,864,530 DEAD COPS.
+// THE ONLY WINNING MOVE IS NOT TO PLAY.
 // REST IN PEACE AUGUST 20, 2018.
+
+// HERE'S A FUCKING PHILOSOPHY FOR YOU: 
+// https://12ft.io/proxy?q=https%3A%2F%2Fwww.theatlantic.com%2Fscience%2Farchive%2F2017%2F08%2Fannie-dillards-total-eclipse%2F536148%2F
+// READ 'EM AND WEEP.
 
 #include <stdlib.h>
 #include <stdarg.h>
@@ -169,6 +176,7 @@ long foci_check(Foci in, char* ptr) {
 // this creates a distinct copy, it's safe to call foci_free on the input afterwards
 // TODO: support distinct foci bordering each other... iterate and check if we're in two spans?
 // TODO: this breaks 0 length spans
+// TODO: can some sweet, silly code guesser fix this function for me? thx...
 Foci foci_merge_overlapping(Foci in) {
     Foci out;
     foci_init(&out);
@@ -306,6 +314,46 @@ void vm_run_around(VM* vm) {
     vm->foci = new_foci;
 }
 
+// expects vm->ip to be pointing to a BCT_STARTS tag
+void vm_run_starts(VM* vm) {    
+    Foci new_foci;
+    foci_init(&new_foci);
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        foci_append(&new_foci, focus.start, focus.start);
+    }
+    foci_free(vm->foci);
+    vm->foci = new_foci;
+}
+
+// expects vm->ip to be pointing to a BCT_ENDS tag
+void vm_run_ends(VM* vm) {    
+    Foci new_foci;
+    foci_init(&new_foci);
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        foci_append(&new_foci, focus.end, focus.end);
+    }
+    foci_free(vm->foci);
+    vm->foci = new_foci;
+}
+
+// expects vm->ip to be pointing to a BCT_COMPLEMENT tag
+void vm_run_complement(VM* vm) {    
+    Foci new_foci;
+    foci_init(&new_foci);
+    char* done = vm->text;
+    for (unsigned long i = 0; i < vm->foci.cnt; i++) {
+        Span focus = vm->foci.s[i];
+        foci_append(&new_foci, done, focus.start);
+        done = focus.end;
+    }
+    foci_append(&new_foci, done, strchr(vm->text, '\0')); 
+    foci_free(vm->foci);
+    vm->foci = new_foci;
+}
+
+
 void print_vm(VM vm) {
     printf("Text: %s\n", vm.text);
     printf("Bytecode:\n");
@@ -327,13 +375,24 @@ char* vm_run(VM vm) {
         switch (vm.bc.tag[vm.ip]) {
             case BCT_DRILL:
                 vm_run_drill(&vm);
-                vm_merge_overlapping_foci(&vm);
+                // TODO: figure out if merging overlapping foci is needed here
+                // TODO: can test with a drill like /ss/ and a string like "sss"
+                // vm_merge_overlapping_foci(&vm);
                 break;
             case BCT_SUBSTITUTE:
                 vm_run_substitute(&vm);
                 break;
             case BCT_AROUND:
                 vm_run_around(&vm);
+                break;
+            case BCT_STARTS:
+                vm_run_starts(&vm);
+                break;
+            case BCT_ENDS:
+                vm_run_ends(&vm);
+                break;
+            case BCT_COMPLEMENT:
+                vm_run_complement(&vm);
                 break;
             default:
                 printf("Got unimplemented bytecode ");
@@ -531,10 +590,14 @@ char* run(char* progstr, char* text) {
 }
 
 int main(int argc, char** argv) {
-    printf("%s\n", run("/hello/ s// s/rld/", strdup("hello, world!")));
+    printf("%s\n", run("/hello,/ s// s/I'm ready to conquer the/", strdup("hello, world!")));
     printf("%s\n", run("^ s/This text is at the start /", strdup("hello, world!")));
     printf("%s\n", run("$ s/ This text is at the end/", strdup("hello, world!")));
     printf("%s\n", run("% s/ This text is at the start and the end /", strdup("hello, world!")));
-    printf("%s\n", run("/,/ @ s/lol/", strdup("hello, world!")));
+    printf("%s\n", run("/,/ @ s/lol/", strdup("hello,,,  world! i love to sing, dance, and play video games!")));
     return 0;
 }
+
+// two men walk abreast
+// into the dark night sky ablaze with
+// ten thousand dying stars
