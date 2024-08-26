@@ -4,6 +4,22 @@
 #include <string.h>
 
 /* ~~~~~~~~~~~ VM ~~~~~~~~~~~ */
+typedef struct Span {
+    void* start;
+    void* end;
+} Span;
+
+typedef struct Foci {
+    unsigned long cnt;         // how many foci exist
+    unsigned long contiguousc; // size of the foci arena.
+    Span* s;                   // the foci
+} Foci;
+
+Foci foci_new() {
+    Foci foci = { .cnt = 0, .contiguousc = 0, .s = NULL };
+    return foci;
+}
+
 typedef enum BytecodeTag {
     BCT_SUBSTITUTE_MATCH,
     BCT_SUBSTITUTE_REPLACE,
@@ -12,32 +28,35 @@ typedef enum BytecodeTag {
     BCT_ECHO
 } BytecodeTag;
 
-
 typedef struct Bytecode {
     BytecodeTag* tag;
     char** data;
-    unsigned int cnt; // count of elements in tag/data
-    unsigned int contiguousc; // size of allocated memory block for tag/data
+    unsigned int cnt;         // count of elements in tags and data
+    unsigned int contiguousc; // size of allocated arenas for tags and data
 } Bytecode;
 
 #define _print_bytecode_branch(name) case name:\
     printf(#name);\
     break;
 
+void print_single_bytecode(Bytecode in, unsigned long ip) {
+    switch (in.tag[ip]) {
+        _print_bytecode_branch(BCT_SUBSTITUTE_MATCH)
+        _print_bytecode_branch(BCT_SUBSTITUTE_REPLACE)
+        _print_bytecode_branch(BCT_DRILL)
+        _print_bytecode_branch(BCT_AROUND)
+        _print_bytecode_branch(BCT_ECHO)
+    }
+    if (in.data[ip] == NULL) {
+        printf(" (no data)\n");
+    } else {
+        printf(" %s\n", in.data[ip]);
+    }
+}
+
 void print_bytecode(Bytecode in) {
     for (unsigned int i = 0; i < in.cnt; i++) {
-        switch (in.tag[i]) {
-            _print_bytecode_branch(BCT_SUBSTITUTE_MATCH)
-            _print_bytecode_branch(BCT_SUBSTITUTE_REPLACE)
-            _print_bytecode_branch(BCT_DRILL)
-            _print_bytecode_branch(BCT_AROUND)
-            _print_bytecode_branch(BCT_ECHO)
-        }
-        if (in.data[i] == NULL) {
-            printf(" (no data)\n");
-        } else {
-            printf(" %s\n", in.data[i]);
-        }
+        print_single_bytecode(in, i);
     }
 }
 
@@ -83,6 +102,116 @@ void bytecode_concat(Bytecode* in, Bytecode other) {
         in->data[in->cnt + i] = other.data[i];
     }
     in->cnt += other.cnt;
+}
+
+typedef struct VM {            // Execution model
+    unsigned long ip;          // current execution offset into Bytecode tag+data
+    Bytecode* bc;              // the bytecode we're executing
+    char* text;                // the text to mutate
+    Foci foci;                // what text is currently focused?
+} VM;
+
+VM vm_new(char* in, Bytecode* bc) {
+    VM vm = { .ip = 0, .bc = bc, .text = in, .foci = foci_new() };
+    return vm;
+}
+
+// once all appending actions have been done, make sure
+// to call foci_merge_overlapping to deduplicate spans
+void foci_append(Foci* foci, void* start, void* end) {    
+    if (foci->contiguousc <= (foci->cnt + 1) * sizeof(Span)) {
+        foci->contiguousc = (foci->contiguousc + 1) * 2;
+        foci->s = realloc(foci->s, foci->contiguousc);
+    }
+    foci->s[foci->cnt].start = start;
+    foci->s[foci->cnt].end = end;
+}
+
+void* foci_min_start(Foci foci) {
+    void* min_start = foci.s[0].start;
+    for (unsigned long i = 1; i < foci.cnt; i++) {
+        if (foci.s[i].start < min_start) {
+            min_start = foci.s[i].start;
+        }
+    }
+    return min_start;
+}
+
+void* foci_max_end(Foci foci) {
+    void* max_end = foci.s[0].end;
+    for (unsigned long i = 1; i < foci.cnt; i++) {
+        if (foci.s[i].end > max_end) {
+            max_end = foci.s[i].end;
+        }
+    }
+    return max_end;
+}
+
+// returns the index of the first span focusing on the ptr, or -1.
+long foci_check(Foci in, void* ptr) {
+    for (unsigned long i = 0; i < in.cnt; i++) {
+        Span tester = in.s[i];
+        if (ptr >= tester.start && ptr < tester.end) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// it's safe to free in->s after calling this
+Foci foci_merge_overlapping(Foci in) {
+    if (in.cnt == 0) {
+        return foci_new();
+    }
+    Foci out = foci_new();
+    void* min_start = foci_min_start(in);
+    void* max_end = foci_max_end(in);
+    foci_append(&out, min_start, min_start+1);
+    char scanning = 1;
+    for (void* ptr = min_start; ptr < max_end; ptr++) {
+        if (foci_check(in, ptr) >= 0) {
+            if (scanning) {
+                out.s[out.cnt - 1].end = ptr+1;
+            } else {
+                foci_append(&out, ptr, ptr+1);
+                scanning = 1;
+            }
+        } else {
+            if (scanning) {
+                scanning = 0;
+            }
+        }
+    }
+    return out;
+}
+
+// expects vm->ip to be pointing to a BCT_DRILL tag and a regex in data
+void vm_run_drill(VM* vm) {
+    char* regex = vm->bc->data[vm->ip];
+    char* found = strstr(vm->text, regex);
+    if (found == NULL) {
+        return;
+    } else {
+        foci_append(&vm->foci, found, found+strlen(regex));
+    }
+}
+
+// returns pointer to mutated text on success, NULL on error
+char* vm_run(VM vm) {
+    for (; vm.ip < vm.bc->cnt; vm.ip++) {
+        switch (vm.bc->tag[vm.ip]) {
+            case BCT_DRILL:
+                vm_run_drill(&vm);
+                break;
+            case BCT_ECHO:
+            case BCT_SUBSTITUTE_MATCH:
+                // TODO the rest of the cases
+            default:
+                printf("Got unimplemented bytecode ");
+                print_single_bytecode(*vm.bc, vm.ip);
+        }
+    }
+    return vm.text;
 }
 
 
